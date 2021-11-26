@@ -1,0 +1,648 @@
+---
+title: "CS01 - Youth Disconnection"
+author: "Kevin Pham, Steve Kuk, Brandon Vazquez-Tellez"
+output: html_document
+---
+
+## Background/Introduction
+
+In this case study, we examined the disparities in Youth connection, which is classified as people from the ages 16-24 who are not going to school or working. In lecture, we examined the importance of this data, citing that "people who experience a period of disconnection as young adults go on to earn less and are less likely to be employed." We wanted to further explore this topic and inspect whether gender and ethnicity had an effect on the disconnected youth. We were able to pull the data from a previous case study "Disparities in Youth Disconnection (See below for reference) which comes from the ACS (American Community Survey), conducted by the US Census Bureau.
+
+References: "Wright, Carrie and Ontiveros, Michael and Jager, Leah and Taub, Margaret and Hicks, Stephanie C. (2020). https://github.com/opencasestudies/ocs-youth-disconnection-case-study. Disparities in Youth Disconnection."
+
+### Load packages
+
+```{r load-packages, message=FALSE}
+#load packages
+library(OCSdata)
+library(tidyverse)
+library(pdftools)
+library(tesseract)
+library(magick)
+library(knitr)
+library(broom)
+library(tidymodels)
+```
+
+## Question
+
+What is the relative effect of gender on percentage across race ethnicity in the
+United States?
+
+## The Data
+
+
+### Data Import
+
+First we need to import the data. Since the data comes in the forms of images,
+we need to extract the data from the images and save all that data in a single 
+file.
+
+```{r}
+#load_raw_data("ocs-bp-youth-disconnection", outpath = '.')
+pdf_tools_example <-
+  pdftools::pdf_text("data/raw/Making_the_Connection.pdf")
+
+#major group data
+major_racial_ethnic_groups <- 
+  magick::image_read("data/raw/Major_ethnic_groups_screenshot.png")
+major_groups <- magick::image_ocr(major_racial_ethnic_groups)
+
+#asian data
+asian_sub_2017 <- image_read("data/raw/asian_subgroups_2017.png")
+asian_sub_2017_A <- image_read("data/raw/asian_sub_2017_A.png")
+asian_sub_2017_B <- image_read("data/raw/asian_sub_2017_B.png")
+asian_sub_2017_C <- image_read("data/raw/asian_sub_2017_C.png")
+asian_sub_2017 <- image_ocr(asian_sub_2017)
+asian_sub_2017_A <- image_ocr(asian_sub_2017_A)
+asian_sub_2017_B <- image_ocr(asian_sub_2017_B)
+asian_sub_2017_C <- image_ocr(asian_sub_2017_C)
+
+#latinx data
+latinx_imageA <- image_read("data/raw/latinx_sub_2017_A.png")
+latinx_imageB <- image_read("data/raw/latinx_sub_2017_B.png")
+latinx_imageC <- image_read("data/raw/latinx_sub_2017_C.png")
+latinx_sub_2017_A <- image_ocr(latinx_imageA)
+latinx_sub_2017_B <- image_ocr(latinx_imageB)
+latinx_sub_2017_C <- image_ocr(latinx_imageC)
+
+#2018 asian data
+asian_sub_2018_A <- image_read("data/raw/asian_sub_2018_A.png")
+asian_sub_2018_A <- image_ocr(asian_sub_2018_A)
+asian_sub_2018_B <- image_read("data/raw/asian_sub_2018_B.png")
+asian_sub_2018_B <- image_ocr(asian_sub_2018_B)
+
+#2018 latinx data
+latinx_sub_2018 <- image_read("data/raw/latinx_subgroups_2018.png")
+latinx_sub_2018 <- image_ocr(latinx_sub_2018)
+
+#save data
+save(
+  major_groups,
+  asian_sub_2017,
+  asian_sub_2017_A, 
+  asian_sub_2017_B,
+  asian_sub_2017_C, 
+  latinx_sub_2017_A,
+  latinx_sub_2017_B,
+  latinx_sub_2017_C,
+  asian_sub_2018_A,
+  asian_sub_2018_B,
+  latinx_sub_2018,
+  file = "data/raw/imported_data.rda")
+```
+
+### Data Wrangling
+
+After loading in our data, it is evident that our data is not in a usable 
+format. We begin cleaning our first dataset by: making rows and columns, making 
+spelling consistent, separating columns into their relevant categories, removing
+empty rows, and adding in variables to fill in later.
+
+```{r}
+#split up into rows
+major_groups <- major_groups |>
+  stringr::str_split(pattern = "\n") |>
+  unlist() |>
+  tibble::as_tibble()
+
+#separate into columns
+major_groups <- 
+  major_groups |>
+  tidyr::separate(col = value, 
+                  into = c("Group", "Years"), 
+                  sep = "(?<=[[:alpha:]])\\s(?=[0-9])")
+
+#make consistent capitalization
+major_groups <- major_groups |> 
+  mutate(Group = stringr::str_to_title(Group))
+
+#separate columns by year
+major_groups <- major_groups |> 
+  tidyr::separate(col = Years, 
+                  into = c("2008", "2010", "2012", "2014", "2016", "2017"), 
+                  sep = " ")
+
+#remove empty rows
+major_groups <- major_groups |> 
+  tidyr::drop_na()
+
+#clean up values
+major_groups <- major_groups |>
+  mutate(
+    across(.cols = -Group,
+           ~ str_remove(string = ., pattern = "\\.")),  # remove decimal points
+    across(.cols = -Group, as.numeric),  # convert to numeric
+    across(.cols = -Group, ~ . * 0.1)   # get our decimal point back
+  )
+
+#add in future variables to use
+major_groups  <- major_groups |>
+mutate(Race_Ethnicity = dplyr::recode(Group, "United States" = "All_races",
+                                  "Female" = "All_races",
+                                  "Male" = "All_races"),
+   Race_Ethnicity = str_remove(string = Race_Ethnicity,
+                               pattern = "Female|Male"))
+
+#create a column for gender
+major_groups  <- major_groups |>
+  mutate(Gender = str_extract(string = Group, 
+                              pattern = "Female|Male")) |>
+  mutate(Gender = replace_na(Gender, replace = "All"))
+
+#reshape data and collapse columns
+major_groups_long <- major_groups |>
+  tidyr::pivot_longer(cols = contains("20"), # any column containing 20
+                      names_to = "Year",
+                      values_to = "Percent",
+                      names_prefix = "Perc_") |>
+  dplyr::mutate(Year = as.numeric(Year))
+```
+
+Next we created a function to automatically make rows, split the data 
+and applied that to our Asian datasets.
+
+```{r}
+#function to make rows
+make_rows <- function(text){
+  text |>
+  str_split("\n") |>
+  unlist() |>
+  as_tibble()
+}
+
+#apply function to Asian data
+asian_sub_2017 <- make_rows(asian_sub_2017) 
+asian_sub_2017_A <- make_rows(asian_sub_2017_A)
+asian_sub_2017_B <- make_rows(asian_sub_2017_B)
+asian_sub_2017_C <- make_rows(asian_sub_2017_C)
+
+#combine Asian data
+asian_sub_2017 <- bind_rows(asian_sub_2017_A, 
+                            asian_sub_2017_B,
+                            asian_sub_2017_C)
+```
+
+We created another function that is meant to clean the data, doing everything 
+that we mentioned previously above for our first dataset, and then applied that 
+function, along with the previous function, to the Asian and Latinx datasets.
+
+```{r}
+#create a function to clean data
+clean_table <- function(table){
+  table |>
+    separate(col = value,
+             into = c("Group", "Percentage"),
+             sep =  "(?<=[[:alpha:]])\\s(?=[0-9])") |> 
+    drop_na() |>
+    mutate(Group = str_to_title(Group)) |>
+    mutate(Percentage = str_remove(string = Percentage,
+                                   pattern = "\\.")) |>
+    separate(Percentage, c("Percent"), sep = " ") |>
+    mutate(Percent = as.numeric(Percent)) |>
+    mutate(Percent = Percent * 0.1) |>
+    mutate(Race_Ethnicity = recode(Group, 
+                                   "United States" = "All_races",
+                                   "Female" = "All_races",
+                                   "Male" = "All_races")) |>
+    mutate(Race_Ethnicity = str_remove(string = Race_Ethnicity,  
+                                       pattern = " Female| Male")) |>
+    mutate(Gender = str_extract(string = Group,
+                                pattern ="Female|Male")) |>
+    mutate(Gender = replace_na(Gender, replace = "All"))
+}
+
+#apply function
+asian_sub_2017 <- clean_table(table = asian_sub_2017)
+
+#combine Latinx data
+latinx_sub_2017 <- stringr::str_c(latinx_sub_2017_A,
+                                  latinx_sub_2017_B, 
+                                  latinx_sub_2017_C)
+
+#fix typos
+latinx_sub_2017 <- latinx_sub_2017 |>
+  str_replace(pattern = "DR, Cuban Female 15.7\nPR",
+              replacement = "DR, Cuban Male 15.7\nPR")
+  
+
+#apply functions to data
+latinx_sub_2017 <- make_rows(latinx_sub_2017)
+latinx_sub_2017 <- clean_table(table = latinx_sub_2017)
+```
+
+Next, we combined the datasets regarding 2018 and adjusted the previous 
+clean_table function so that it would make a new column but keep the missing 
+positions to be filled in at a later date, rather than dropping all the empty 
+rows. We applied this function to the Asian data and then filled in the missing 
+information we left open with Asian data from text. Lastly, we combined the 
+Asian information for 2017 and 2018.
+
+```{r}
+#combine asian data
+asian_sub_2018 <- str_c(asian_sub_2018_A, asian_sub_2018_B)
+
+#apply function to data
+asian_sub_2018 <- make_rows(asian_sub_2018)
+
+#modified function for 2018 data
+clean_table_2018 <- function(table){
+  table |>
+    separate(col = value, 
+             into = c("Group", "Percent"), 
+             sep =  "(?<=[[:alpha:]])\\s:\\s|\\s(?=[0-9])") |> 
+    mutate(Group = str_remove(string = Group, 
+                            pattern = ":")) |>
+    drop_na() |>
+    mutate(Group = str_to_title(string = Group)) |>
+    mutate(Percent = str_remove(string = Percent, 
+                               pattern = "\\.")) |>
+    mutate(Percent = as.numeric(Percent)) |>
+    mutate(Percent = Percent * 0.1) |>
+    mutate(Race_Ethnicity = str_replace(string = Group,
+                                        pattern = "Men|Women",
+                                        replacement = "missing")) |>
+    mutate(Race_Ethnicity = na_if(Race_Ethnicity, "missing")) |>
+    fill(Race_Ethnicity, .direction = "down") |>
+    mutate(Gender = str_extract(string = Group, 
+                                pattern = "Men|Women")) |>
+    mutate(Gender = replace_na(Gender, replace = "All"))
+}
+
+#apply function to data
+asian_sub_2018 <- clean_table_2018(asian_sub_2018)
+
+#add all asian data from text
+asian_sub_2018 <- asian_sub_2018 |>
+  add_row(Group = "Asian", Percent = 6.2,
+          Race_Ethnicity = "Asian", Gender = "All") |>
+  add_row(Group = "Asian", Percent = 6.4,
+          Race_Ethnicity = "Asian", Gender = "Men") |>
+  add_row(Group = "Asian", Percent = 6.1,
+          Race_Ethnicity = "Asian", Gender = "Women")
+
+#make new column for 2017 and 2018 data
+asian_sub_2017 <- asian_sub_2017 |>
+  mutate(Year = 2017)
+asian_sub_2018 <- asian_sub_2018 |>
+  mutate(Year = 2018)
+
+#make gender information consistent
+asian_sub_2018 <- asian_sub_2018 |> 
+  mutate(across(.cols = c(Gender, Group),
+               ~ str_replace(string = ., 
+                             pattern = "Men", 
+                             replacement = "Male")),
+         across(.cols = c(Gender, Group),
+               ~ str_replace(string = ., 
+                             pattern = "Women", 
+                             replacement = "Female")))
+
+#combine asian data from 2017 and 2018
+asian_subgroups <- bind_rows(asian_sub_2017, asian_sub_2018)
+```
+
+We repeated the steps we took with the asian data and used the same functions 
+and applied those to the Latinx data.
+
+```{r}
+#replace characters
+latinx_sub_2018 <- str_replace_all(string = latinx_sub_2018, 
+                                  pattern = "\\s:\n{2}|\n{2}", #remove two newline characters
+                                  replacement = " ")
+
+#apply functions
+latinx_sub_2018 <- make_rows(latinx_sub_2018 )
+latinx_sub_2018 <- clean_table_2018(latinx_sub_2018)
+
+#create function for fixing names
+fix_latinx_naming <- function(table){ 
+  table |>
+  mutate(Group = str_replace(string = Group,
+                             pattern = "Pr, Dr, Cuban",
+                             replacement = "Puerto Rican, Dominican, Cuban"), 
+          Race_Ethnicity = str_replace(string = Race_Ethnicity,
+                                       pattern = "Pr, Dr, Cuban",
+                                       replacement = "Puerto Rican, Dominican, Cuban"))
+}
+
+#apply function to datasets
+latinx_sub_2017 <- fix_latinx_naming(latinx_sub_2017)
+latinx_sub_2018 <- fix_latinx_naming(latinx_sub_2018)
+
+#add in latinx data from text
+latinx_sub_2018 <- latinx_sub_2018 |>
+  add_row(Group = "Latinx", Percent = 12.8,
+          Race_Ethnicity = "Latinx", Gender = "All") |>
+  add_row(Group = "Latinx", Percent = 12.3,
+          Race_Ethnicity = "Latinx", Gender = "Men") |>
+  add_row(Group = "Latinx", Percent = 13.3,
+          Race_Ethnicity = "Latinx", Gender = "Women")
+
+#recode gender
+latinx_sub_2018 <- latinx_sub_2018 |>
+  mutate(across(.cols = c(Gender, Group),
+                ~ str_replace(string = ., pattern = "Men", replacement = "Male")),
+         across(.cols = c(Gender, Group),
+                ~ str_replace(string = ., pattern = "Women", replacement = "Female")))
+
+#create new columns for years and combine data
+latinx_sub_2017 <- latinx_sub_2017 |>
+  mutate(Year = 2017)
+latinx_sub_2018 <- latinx_sub_2018 |>
+  mutate(Year = 2018)
+latinx_subgroups <- bind_rows(latinx_sub_2017, latinx_sub_2018)
+
+#add missing categories in data
+latinx_subgroups <- latinx_subgroups |>
+  select(-Group) |>
+  pivot_wider(names_from = Year, values_from = Percent) |>
+  pivot_longer(cols = -c(Race_Ethnicity, Gender), 
+               names_to ="Year" , 
+               values_to="Percent")
+```
+
+We saved all of the code wrangling we did into a data file so that we wouldn't 
+have to re-run all this code everytime we needed to call on it.
+
+```{r}
+#save data
+save(major_groups_long, asian_subgroups, latinx_subgroups, file = "data/wrangled_data.rda")
+readr::write_csv(major_groups_long, file = "data/wrangled_major_groups_data.csv")
+readr::write_csv(asian_subgroups, file = "data/wrangled_asian_subgroups_data.csv")
+readr::write_csv(latinx_subgroups, file = "data/wrangled_latinx_subgroups_data.csv")
+```
+
+We loaded in the saved data so that we could easily call on this information.
+
+```{r}
+#load in data from now on
+major_groups_long <- read.csv(file = 'data/wrangled_major_groups_data.csv')
+asian_subgroups <- read.csv(file = 'data/wrangled_asian_subgroups_data.csv')
+latinx_subgroups <- read.csv(file = 'data/wrangled_latinx_subgroups_data.csv')
+```
+
+## Analysis
+
+```{r}
+view(major_groups_long)
+view(asian_subgroups)
+view(latinx_subgroups)
+```
+
+Loading in and viewing the data we can see major_groups_long, asian_subgroups, 
+latinx_subgroups. All three have similar columns that exemplify youth 
+disconnection between genders and ethnicity. Taking into consideration the 
+limitations; certain groups being underrepresented, it can be seen in the 
+"exploratory data analysis" that there is a drop in percentage from the start of
+2010. It is important to note that the mean and median play a crucial role in 
+interpreting data and being able to see if the mean is higher than the median
+gives us insight on possible outliers.
+
+### Exploratory Data Analysis
+```{r}
+#view statistics
+major_groups_long |>
+  group_by(Group) |>
+  summarise(mean = mean(Percent), median = median(Percent), std = sd(Percent))
+
+asian_subgroups |>
+  group_by(Race_Ethnicity) |>
+  summarise(mean = mean(Percent), median = median(Percent), std = sd(Percent))
+
+latinx_subgroups |>
+  group_by(Race_Ethnicity) |>
+  summarise(mean = mean(Percent, na.rm = TRUE), median = median(Percent, na.rm = TRUE), std= sd(Percent, na.rm =TRUE))
+```
+
+We first took the mean and median for our data in order to see more clearly what
+the disparities are. Comparing the statistics, we can see a general trend where 
+youth in the Black and Native American groups have the largest percentage of 
+disconnection rates.
+
+```{r}
+#Compare asian male and female disconnection rates
+major_groups_long |>
+  filter(Group %in% c("Asian Male", "Asian Female")) |>
+  ggplot(aes(x = Year, y = Percent, color = Group)) +
+    geom_line(size = 0.5) +
+    geom_point(size = 3) +
+  labs(title = "Asian Male Vs Female Disconnection Rates") 
+
+#Compare white male and female disconnection rates
+major_groups_long |>
+  filter(Group %in% c("White Male", "White Female")) |>
+  ggplot(aes(x = Year, y = Percent, color = Group)) +
+    geom_line(size = 0.5) +
+    geom_point(size = 3) +
+  labs(title = "White Male vs Female Disconnection Rates")
+
+#Compare disconnection rates by all races
+major_groups_long |>
+  filter(Race_Ethnicity != "All_races") |>
+  ggplot(aes(x = Year, y = Percent, color = Race_Ethnicity)) +
+    geom_line(size = 0.5) +
+    geom_point(size = 3) +
+    labs(title = "Disconnection Rates by Race")
+```
+
+In order to view the rate of disconnection in youth more specifically, we 
+decided to look at the disparity between genders in different ethnic groups. 
+First off, we're looking at our major_groups_long data. We look at the Asian 
+male and female disconnection rates by filtering through the data to visualize 
+this difference. Secondly, we take White male and female data and visualize the
+disparity. From the graphs, we can see that Asian Females and White Males 
+generally has higher disconnection rates over the years than their counterparts.
+
+```{r}
+#Compare disconnection rates by Asian subgroups
+asian_subgroups |>
+  filter(!Race_Ethnicity %in% c("All_races", "Asian")) |>
+  ggplot(aes(x = Year, y = Percent, color = Race_Ethnicity)) +
+    geom_line(size = 0.5) +
+    geom_point(size = 3) +
+    labs(title = "Disconnection Rates by Asian Sub-Race")
+
+#Compare disconnection rates by LatinX subgroups
+latinx_subgroups |>
+  ggplot(aes(x = Year, y = Percent, color = Race_Ethnicity)) +
+    geom_line(size = 0.5) +
+    geom_point(size = 3) +
+    labs(title = "Disconnection Rates by LatinX Sub-Race")
+```
+
+Finally, we also looked into disconnection rates of between different sub-races. 
+From the previous graph, we again see that youth that are part of the Black and Native 
+American groups have highest disconnection percentages. Because of this, we wanted to 
+look into specifics statistics of Asian and LatinX subgroups. Out of all the 
+Asian subgroups, we can see that Hmong has had the highest disconnection rate 
+until 2018. Likewise, out of all the LatinX subgroups, we see that the subgroups
+'Central American' and 'Puerto Rican, Dominican, Cuban' generally has the 
+highest disconnection rates.
+
+```{r}
+major_groups_long |>
+  filter(!Group %in% c("Asian", "White", "Latino", "Black", "Native American"), Gender != "All",
+         Race_Ethnicity != "All_races") |>
+  ggplot(aes(x = Race_Ethnicity, y = Percent, color = Gender)) +
+    geom_jitter() +
+    coord_flip() +
+    labs(title = "Effect of Gender on Percentage across Race Ethnicity")
+
+asian_subgroups |>
+  filter(!Group %in% c("United States", "Male", "Female"),
+         Gender != "All", Race_Ethnicity != "Asian") |>
+  ggplot(aes(x = Race_Ethnicity, y = Percent, color = Gender)) +
+    geom_jitter() +
+    coord_flip() +
+    labs(title = "Effect of Gender on Percentage across Asian Sub-races")
+
+latinx_subgroups |>
+  filter(Gender != "All") |>
+  ggplot(aes(x = Race_Ethnicity, y = Percent, color = Gender)) +
+    geom_jitter() +
+    coord_flip() +
+    labs(title = "Effect of Gender on Percentage across LatinX Sub-races")
+```
+Based off of our previous results and studies, we decided to look more into how Gender affects Percentage across different race ethnicity in the United States (our question). We graphed the relationship between Gender and Percentage across the general race ethnicity then graphed the relationship of its subgroups. From the first graph, we can see that males tend to be on the higher percentages whereas females are spread across the middle to lower end of the percentages. Looking at the Asian subgroups, we again see that males tend to be on the higher percentages compared to their counterparts. Finally, looking at the LatinX subgroups, we see that there are generally more females on the higher percentages than males.
+
+### Data Analysis
+
+First we filtered out any information other than male and female for each ethnicity and added in the row to serve as our base percentage. Then we performed a linear regression model on the major groups dataset using the Percent and Groups.
+```{r}
+#linear regression
+major_lin <- major_groups_long |>
+  filter(!Group %in% c("Asian", "White", "Latino", "Black", "Native American"), Gender != "All",
+         Race_Ethnicity != "All_races") |>
+  add_row(Group = "AAUnited States", Race_Ethnicity = "All Races", Gender = "All", Percent = 12.97)
+major_groups_long_lin <- linear_reg() |>
+  set_engine("lm") |>
+  fit(Percent ~ Group, data = major_lin)
+
+```
+
+Next we added a new column to the asian dataset for male and female for each nationality and added in a row to serve as our base percentage. Then we performed a linear regression model on the asian dataset using the Percent and Nationality.
+```{r}
+#linear regression
+asian_lin_1 <- asian_subgroups |>
+  mutate(Nationality = case_when(
+    Gender == "Male" & Race_Ethnicity == "Chinese" ~ "Chinese Male",
+    Gender == "Female" & Race_Ethnicity == "Chinese" ~ "Chinese Female",
+    Gender == "Male" & Race_Ethnicity == "Vietnamese" ~ "Vietnamese Male",
+    Gender == "Female" & Race_Ethnicity == "Vietnamese" ~ "Vietnamese Female",
+    Gender == "Male" & Race_Ethnicity == "Indian" ~ "Indian Male",
+    Gender == "Female" & Race_Ethnicity == "Indian" ~ "Indian Female",
+    Gender == "Male" & Race_Ethnicity == "Korean" ~ "Korean Male",
+    Gender == "Female" & Race_Ethnicity == "Korean" ~ "Korean Female",
+    Gender == "Male" & Race_Ethnicity == "Filipino" ~ "Filipino Male",
+    Gender == "Female" & Race_Ethnicity == "Filipino" ~ "Filipino Female",
+    Gender == "Male" & Race_Ethnicity == "Hmong" ~ "Hmong Male"
+  )) |>
+  drop_na() |>
+  add_row(Group = "United States", Race_Ethnicity = "Asian", Gender = "All", Percent = 11.5, Nationality = "AAUnited States") |>
+  add_row(Group = "Asian", Race_Ethnicity = "Asian", Gender = "All", Percent = 6.4, Nationality = "Asian")
+asian_lin <- linear_reg() |>
+  set_engine("lm") |>
+  fit(Percent ~ Nationality, data = asian_lin_1)
+```
+
+Lastly we filtered for either male or female gender and added a new column to the latinx dataset for male and female for each nationality. We then added in a row to serve as our base percentage and performed a linear regression model on the latinx dataset using the Percent and Group.
+
+```{r}
+latinx_lin_1 <- latinx_subgroups |>
+  filter(Gender != "All") |>
+  mutate(Group = case_when(
+    Gender == "Male" & Race_Ethnicity == "Latino" ~ "Latino Male",
+    Gender == "Female" & Race_Ethnicity == "Latina" ~ "Latina Female",
+    Gender == "Male" & Race_Ethnicity == "South American" ~ "South American Male",
+    Gender == "Female" & Race_Ethnicity == "South American" ~ "South American Female",
+    Gender == "Male" & Race_Ethnicity == "Central American" ~ "Central American Male",
+    Gender == "Female" & Race_Ethnicity == "Central American" ~ "Central American Female",
+    Gender == "Male" & Race_Ethnicity == "Mexican" ~ "Mexican Male",
+    Gender == "Female" & Race_Ethnicity == "Mexican" ~ "Mexican Female",
+    Gender == "Male" & Race_Ethnicity == "Other Latino" ~ "Other Latino Male",
+    Gender == "Female" & Race_Ethnicity == "Other Latina" ~ "Other Latina Female",
+    Gender == "Male" & Race_Ethnicity == "Puerto Rican, Dominican, Cuban" ~ "Puerto Rican, Dominican, Cuban Male",
+    Gender == "Female" & Race_Ethnicity == "Puerto Rican, Dominican, Cuban" ~ "Puerto Rican, Dominican, Cuban Female",
+    Gender == "Male" & Race_Ethnicity == "Latinx" ~ "Latinx Male",
+    Gender == "Female" & Race_Ethnicity == "Latinx" ~ "Latinx Female")) |>
+  add_row(Race_Ethnicity = "Latinx", Gender = "All", Percent = 9.77, Group = "AALat") |>
+  add_row(Group = "AUnited States", Race_Ethnicity = "Asian", Gender = "All", Percent = 11.5)
+latinx_lin <- linear_reg() |>
+  set_engine("lm") |>
+  fit(Percent ~ Group, data = latinx_lin_1)
+
+```
+
+### Results
+
+The following pieces of code are a result of applying linear regression to the different datasets. In order to better understand the effects of gender on percentage across race ethnicity, it is important to be able to interpret the information.
+
+```{r}
+#results from major groups dataset
+major_groups_long_lin |> tidy()
+```
+
+This first table displays the relationship between percentage and group for each of the different ethnicity and gender. On average, people in the United States are expected to make up 12.97 percent of the disconnected youth. The table then displays all the other ethnicity and gender in comparison to the base percentage of people in the United States who are part of the disconnected youth. 
+
+On average, Asian females are expected to make up 5.22 percent less of the disconnected youth while Asian males are expected to make up 5.90 percent less of the disconnected youth compared to the base percentage.
+
+On average, Black females are expected to make up 4.01 percent more of the disconnected youth while Black males are expected to make up 10.31 percent more of the disconnected youth compared to the base percentage.
+
+On average, Latina females are expected to make up 4.45 percent more of the disconnected youth while Latino males are expected to make up 1.26 percent more of the disconnected youth compared to the base percentage.
+
+On average, Native American females are expected to make up 12.03 percent more of the disconnected youth while Native American males are expected to make up 14.06 percent more of the disconnected youth compared to the base percentage.
+
+On average, White females are expected to make up 2.79 percent less of the disconnected youth while White males are expected to make up 2.35 percent less of the disconnected youth compared to the base percentage.
+
+```{r}
+#results from asian dataset
+asian_lin |> tidy()
+```
+
+This second table displays the relationship between percentage and nationality for each of the different asian nationalities and gender. On average, people in the United States are expected to make up 11.5 percent of the disconnected youth while asians are expected to make up 5.1 percent less, coming in at 6.4 percent. The table then displays all the other asian nationalities and gender in comparison to the base percentage of people in the United States who are part of the disconnected youth. 
+
+On average, Chinese females are expected to make up 7.7 percent less of the disconnected youth while Chinese males are expected to make up 6.9 percent less of the disconnected youth compared to the base percentage.
+
+On average, Filipino females are expected to make up 3.75 percent less of the disconnected youth while Filipino males are expected to make up 5.1 percent less of the disconnected youth compared to the base percentage.
+
+On average, Indian females are expected to make up 4.55 percent less of the disconnected youth while Indian males are expected to make up 7.1 percent less of the disconnected youth compared to the base percentage.
+
+On average, Korean females are expected to make up 6.3 percent less of the disconnected youth while Korean males are expected to make up 4.7 percent less of the disconnected youth compared to the base percentage.
+
+On average, Vietnamese females are expected to make up 7.3 percent less of the disconnected youth while Vietnamese males are expected to make up 3.95 percent less of the disconnected youth compared to the base percentage.
+
+```{r}
+#results from latinx dataset
+latinx_lin |> tidy()
+```
+
+This third table displays the relationship between percentage and group for each of the different latinx nationalities and gender. On average, those in the latinx communities are expected to make up 9.77 percent of the disconnected youth while people in the United States, of any ethnicity, generally make up 1.73 percent more of the disconnected youth. The table then displays all the other latinx nationalities and gender in comparison to the base percentage of latinx in the United States who are part of the disconnected youth. 
+
+On average, Central American females are expected to make up 5.68 percent more of the disconnected youth while Central American males are expected to make up 0.78 percent less of the disconnected youth compared to the base percentage.
+
+On average, Latina females are expected to make up 4.13 percent more of the disconnected youth while Latino males are expected to make up 2.63 percent more of the disconnected youth compared to the base percentage.
+
+On average, Latinx females are expected to make up 3.53 percent more of the disconnected youth while Latinx males are expected to make up 2.53 percent more of the disconnected youth compared to the base percentage.
+
+On average, Mexican females are expected to make up 4.33 percent more of the disconnected youth while Mexican males are expected to make up 2.33 percent more of the disconnected youth compared to the base percentage.
+
+On average, Other Latina females are expected to make up 1.73 percent more of the disconnected youth while Other Latino males are expected to make up 5.53 percent more of the disconnected youth compared to the base percentage.
+
+On average, Puerto Rican, Dominican, and Cuban females are expected to make up 3.63 percent more of the disconnected youth while Puerto Rican, Dominican, and Cuban males are expected to make up 5.53 percent more of the disconnected youth compared to the base percentage.
+
+On average, South American females are expected to make up 2.07 percent less of the disconnected youth while South American males are expected to make up 1.47 percent less of the disconnected youth compared to the base percentage.
+
+
+### Discussion of Results
+
+Through the interpretations of the major groups table, it is evident that overall, females make up more percentage of disconnected youth compared to their male counterparts and base percentages within the ethnicity. The exceptions to this would be Black and Native American females who make up less percentage of the disconnected youth. 
+
+Through the interpretations of the asian table, it is evident that overall, females make up less percentage compared to their male counterparts and base percentages within the ethnicity. An exception to this would be Filipino and Indian females who make up more percentage of the disconnected youth. It is important to note that while there are drastic decreases in percentages when comparing each of these Asian nationalities to the average person in the United States, there is very little percentage change when comparing them among other Asian nationalities. In addition, due to faulty information gathering, there was no data available for comparison for Hmong, Cambodian, pakistani, and two or more nationalities. Because of this, the previously named nationalities were left out of comparison for the genders. 
+
+Through the interpretations of the latinx table, it is evident that overall, females make up more percentage of disconnected youth compared to their male counterparts and base percentages within the ethnicity. The exceptions to this would be Other Latina and South American females who make up less percentage of the disconnected youth. 
+
+The findings in the asian table were not consistent with that of the major group table because in the major group table, asian females made up more percentage of the disconnected youth compared to their male counterparts while in the asian table, asian females made up less percentage. On the other hand, the findings in the latinx table were consistent with the major group table because the females make up more percentage of the disconnected youth compared to their male counterparts. 
+ 
+## Conclusion
+In conclusion, to answer our question of what is the relative effect of gender on percentage across race ethnicity in the United States, we see the general trend where females made up more percentage of disconnected youth than their male counterparts. Though when looking more into the data and confounding variables (Asian subgroup and LatinX subgroup) we see that when broken down, the results can vary. For example, although the LatinX subgroup dataset did infact follow the results of the general dataset (major_groups_long), the Asian subgroup results did not. This is significant because there may be other variables that we do not know about that can affect the results of our analysis. To further develop our question in the future, we can include more data and information to help us come to a stronger and better understanding of how gender can affect the percentage of disconnected youth in the United States.
